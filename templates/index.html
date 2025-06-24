@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>E-Learning Courses</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Available Courses</h1>
+    <ul>
+        {% for course in courses %}
+        <li><a href="/course/{{ course.id }}">{{ course.title }}</a></li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
