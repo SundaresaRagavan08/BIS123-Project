@@ -1,0 +1,18 @@
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+# In-memory data store
+items = []
+id_counter = 1
+# Update (PUT)
+@app.route('/items/<int:item_id>', methods=['PUT'])
+def update_item(item_id):
+    data = request.json
+    for item in items:
+        if item['id'] == item_id:
+            item['name'] = data['name']
+            return jsonify(item)
+    return jsonify({'error': 'Item not found'}), 404
+    if __name__ == '__main__':
+    app.run(debug=True)

@@ -1,0 +1,13 @@
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+# In-memory data store
+items = []
+id_counter = 1
+# Read (GET)
+@app.route('/items', methods=['GET'])
+def get_items():
+    return jsonify(items)
+    if __name__ == '__main__':
+    app.run(debug=True)
