@@ -1,0 +1,126 @@
+import pytest
+import json
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import app, init_db
+
+@pytest.fixture
+def client():
+    app.config['TESTING'] = True
+    # Use a test database
+    os.environ['DATABASE_URL'] = ':memory:'
+    
+    with app.test_client() as client:
+        with app.app_context():
+            init_db()
+        yield client
+
+def test_get_employees(client):
+    """Test GET /api/employees"""
+    response = client.get('/api/employees')
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+    assert len(data) > 0
+
+def test_create_employee(client):
+    """Test POST /api/employees"""
+    new_employee = {
+        'name': 'Test User',
+        'email': 'test@greythr.com',
+        'department': 'IT',
+        'position': 'Developer',
+        'role': 'employee'
+    }
+    
+    response = client.post('/api/employees', 
+                          data=json.dumps(new_employee),
+                          content_type='application/json')
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert 'id' in data
+
+def test_create_duplicate_employee(client):
+    """Test creating employee with duplicate email"""
+    employee = {
+        'name': 'Duplicate User',
+        'email': 'rajesh@greythr.com',  # This email already exists
+        'department': 'IT',
+        'position': 'Developer'
+    }
+    
+    response = client.post('/api/employees',
+                          data=json.dumps(employee),
+                          content_type='application/json')
+    assert response.status_code == 400
+
+def test_update_employee(client):
+    """Test PUT /api/employees/<id>"""
+    # First get an employee
+    response = client.get('/api/employees')
+    employees = json.loads(response.data)
+    employee_id = employees[0]['id']
+    
+    updated_data = {
+        'name': 'Updated Name',
+        'email': employees[0]['email'],
+        'department': 'Updated Department',
+        'position': 'Updated Position',
+        'role': 'employee'
+    }
+    
+    response = client.put(f'/api/employees/{employee_id}',
+                         data=json.dumps(updated_data),
+                         content_type='application/json')
+    assert response.status_code == 200
+
+def test_get_leave_requests(client):
+    """Test GET /api/leave-requests"""
+    response = client.get('/api/leave-requests')
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+
+def test_create_leave_request(client):
+    """Test POST /api/leave-requests"""
+    # Get an employee first
+    response = client.get('/api/employees')
+    employees = json.loads(response.data)
+    employee_id = employees[0]['id']
+    
+    leave_request = {
+        'employee_id': employee_id,
+        'leave_type': 'Annual',
+        'start_date': '2024-12-25',
+        'end_date': '2024-12-27',
+        'reason': 'Holiday vacation'
+    }
+    
+    response = client.post('/api/leave-requests',
+                          data=json.dumps(leave_request),
+                          content_type='application/json')
+    assert response.status_code == 201
+
+def test_get_dashboard_stats(client):
+    """Test GET /api/dashboard/stats"""
+    response = client.get('/api/dashboard/stats')
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert 'total_employees' in data
+    assert 'pending_requests' in data
+    assert 'approved_requests' in data
+
+def test_get_leave_balances(client):
+    """Test GET /api/leave-balances/<employee_id>"""
+    # Get an employee first
+    response = client.get('/api/employees')
+    employees = json.loads(response.data)
+    employee_id = employees[0]['id']
+    
+    response = client.get(f'/api/leave-balances/{employee_id}')
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+    assert len(data) > 0
