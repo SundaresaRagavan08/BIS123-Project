@@ -1,0 +1,99 @@
+import pytest
+import json
+import requests
+import time
+import subprocess
+import sys
+import os
+
+# Integration test that tests frontend-backend interaction
+class TestIntegration:
+    @classmethod
+    def setup_class(cls):
+        """Start the Flask server for integration testing"""
+        cls.base_url = 'http://localhost:5000'
+        
+    def test_full_employee_workflow(self):
+        """Integration test: Complete employee and leave request workflow"""
+        
+        try:
+            # Test 1: Get initial employee list
+            response = requests.get(f'{self.base_url}/api/employees')
+            assert response.status_code == 200
+            initial_employees = response.json()
+            initial_count = len(initial_employees)
+            
+            # Test 2: Create a new employee
+            new_employee = {
+                'name': 'Integration Test User',
+                'email': 'integration@greythr.com',
+                'department': 'QA',
+                'position': 'Test Engineer',
+                'role': 'employee'
+            }
+            
+            response = requests.post(f'{self.base_url}/api/employees',
+                                   json=new_employee)
+            assert response.status_code == 201
+            created_employee_id = response.json()['id']
+            
+            # Test 3: Verify employee was created
+            response = requests.get(f'{self.base_url}/api/employees')
+            assert response.status_code == 200
+            updated_employees = response.json()
+            assert len(updated_employees) == initial_count + 1
+            
+            # Test 4: Check leave balances were created
+            response = requests.get(f'{self.base_url}/api/leave-balances/{created_employee_id}')
+            assert response.status_code == 200
+            balances = response.json()
+            assert len(balances) == 3  # Annual, Sick, Personal
+            
+            # Test 5: Create a leave request
+            leave_request = {
+                'employee_id': created_employee_id,
+                'leave_type': 'Annual',
+                'start_date': '2024-12-20',
+                'end_date': '2024-12-22',
+                'reason': 'Integration test leave'
+            }
+            
+            response = requests.post(f'{self.base_url}/api/leave-requests',
+                                   json=leave_request)
+            assert response.status_code == 201
+            request_id = response.json()['id']
+            
+            # Test 6: Approve the leave request
+            response = requests.put(f'{self.base_url}/api/leave-requests/{request_id}/approve',
+                                  json={'approved_by': 'Integration Test Manager'})
+            assert response.status_code == 200
+            
+            # Test 7: Verify leave balance was updated
+            response = requests.get(f'{self.base_url}/api/leave-balances/{created_employee_id}')
+            balances = response.json()
+            annual_balance = next(b for b in balances if b['leave_type'] == 'Annual')
+            assert annual_balance['used_days'] == 3
+            assert annual_balance['remaining_days'] == 21
+            
+            # Test 8: Get dashboard stats
+            response = requests.get(f'{self.base_url}/api/dashboard/stats')
+            assert response.status_code == 200
+            stats = response.json()
+            assert stats['total_employees'] == initial_count + 1
+            
+            # Cleanup: Delete the test employee
+            response = requests.delete(f'{self.base_url}/api/employees/{created_employee_id}')
+            assert response.status_code == 200
+            
+            print("✅ Integration test completed successfully!")
+            
+        except requests.exceptions.ConnectionError:
+            pytest.skip("Flask server not running. Start with 'python backend/app.py' first.")
+        except Exception as e:
+            pytest.fail(f"Integration test failed: {str(e)}")
+
+if __name__ == "__main__":
+    # Run the integration test directly
+    test = TestIntegration()
+    test.setup_class()
+    test.test_full_employee_workflow()
