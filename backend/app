@@ -6,10 +6,7 @@ from datetime import datetime, timedelta
 import uuid
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": [
-    "https://sundaresaragavan08.github.io",
-    "http://localhost:5173/BIS123-Project/"
-]}}, supports_credentials=True)
+CORS(app, supports_credentials=True)
 
 # Database initialization
 def init_db():
