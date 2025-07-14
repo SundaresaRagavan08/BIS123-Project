@@ -1,22 +1,321 @@
-from flask import Flask, render_template, request
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import sqlite3
+import json
+from datetime import datetime, timedelta
+import uuid
 
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
 
-# Sample course data
-courses = [
-    {'id': 1, 'title': 'Python for Beginners', 'description': 'Learn Python from scratch.'},
-    {'id': 2, 'title': 'Web Development', 'description': 'HTML, CSS, and JS for building websites.'},
-    {'id': 3, 'title': 'AI Basics', 'description': 'Introduction to Artificial Intelligence.'}
-]
+# Database initialization
+def init_db():
+    conn = sqlite3.connect('leave_management.db')
+    cursor = conn.cursor()
+    
+    # Create employees table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS employees (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            department TEXT NOT NULL,
+            position TEXT NOT NULL,
+            role TEXT DEFAULT 'employee',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create leave_balances table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS leave_balances (
+            id TEXT PRIMARY KEY,
+            employee_id TEXT NOT NULL,
+            leave_type TEXT NOT NULL,
+            total_days INTEGER NOT NULL,
+            used_days INTEGER DEFAULT 0,
+            remaining_days INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            FOREIGN KEY (employee_id) REFERENCES employees (id)
+        )
+    ''')
+    
+    # Create leave_requests table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS leave_requests (
+            id TEXT PRIMARY KEY,
+            employee_id TEXT NOT NULL,
+            employee_name TEXT NOT NULL,
+            leave_type TEXT NOT NULL,
+            start_date DATE NOT NULL,
+            end_date DATE NOT NULL,
+            days_requested INTEGER NOT NULL,
+            reason TEXT,
+            status TEXT DEFAULT 'pending',
+            approved_by TEXT,
+            approved_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (employee_id) REFERENCES employees (id)
+        )
+    ''')
+    
+    # Insert sample data
+    cursor.execute("SELECT COUNT(*) FROM employees")
+    if cursor.fetchone()[0] == 0:
+        sample_employees = [
+            ('emp1', 'Rajesh Kumar', 'rajesh@greythr.com', 'Engineering', 'Senior Developer', 'employee'),
+            ('emp2', 'Priya Sharma', 'priya@greythr.com', 'HR', 'HR Manager', 'hr'),
+            ('emp3', 'Arjun Patel', 'arjun@greythr.com', 'Sales', 'Sales Executive', 'employee'),
+            ('emp4', 'Kavya Reddy', 'kavya@greythr.com', 'Marketing', 'Marketing Lead', 'manager'),
+            ('emp5', 'Suresh Nair', 'suresh@greythr.com', 'Engineering', 'Team Lead', 'manager')
+        ]
+        
+        cursor.executemany('''
+            INSERT INTO employees (id, name, email, department, position, role)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', sample_employees)
+        
+        # Add leave balances for each employee
+        leave_balances = []
+        for emp_id, _, _, _, _, _ in sample_employees:
+            leave_balances.extend([
+                (str(uuid.uuid4()), emp_id, 'Annual', 24, 0, 24, 2024),
+                (str(uuid.uuid4()), emp_id, 'Sick', 12, 0, 12, 2024),
+                (str(uuid.uuid4()), emp_id, 'Personal', 8, 0, 8, 2024)
+            ])
+        
+        cursor.executemany('''
+            INSERT INTO leave_balances (id, employee_id, leave_type, total_days, used_days, remaining_days, year)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', leave_balances)
+    
+    conn.commit()
+    conn.close()
 
-@app.route('/')
-def home():
-    return render_template('index.html', courses=courses)
+# Utility functions
+def get_db_connection():
+    conn = sqlite3.connect('leave_management.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-@app.route('/course/<int:course_id>')
-def course_detail(course_id):
-    course = next((c for c in courses if c['id'] == course_id), None)
-    return render_template('course.html', course=course)
+def calculate_days(start_date, end_date):
+    start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+    return (end - start).days + 1
+
+# API Routes
+
+# Employees CRUD
+@app.route('/api/employees', methods=['GET'])
+def get_employees():
+    conn = get_db_connection()
+    employees = conn.execute('SELECT * FROM employees ORDER BY name').fetchall()
+    conn.close()
+    return jsonify([dict(emp) for emp in employees])
+
+@app.route('/api/employees', methods=['POST'])
+def create_employee():
+    data = request.get_json()
+    
+    conn = get_db_connection()
+    employee_id = str(uuid.uuid4())
+    
+    try:
+        conn.execute('''
+            INSERT INTO employees (id, name, email, department, position, role)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (employee_id, data['name'], data['email'], data['department'], 
+              data['position'], data.get('role', 'employee')))
+        
+        # Create default leave balances
+        leave_types = [
+            ('Annual', 24),
+            ('Sick', 12),
+            ('Personal', 8)
+        ]
+        
+        for leave_type, days in leave_types:
+            conn.execute('''
+                INSERT INTO leave_balances (id, employee_id, leave_type, total_days, used_days, remaining_days, year)
+                VALUES (?, ?, ?, ?, 0, ?, 2024)
+            ''', (str(uuid.uuid4()), employee_id, leave_type, days, days))
+        
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Employee created successfully', 'id': employee_id}), 201
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({'error': 'Email already exists'}), 400
+
+@app.route('/api/employees/<employee_id>', methods=['PUT'])
+def update_employee(employee_id):
+    data = request.get_json()
+    
+    conn = get_db_connection()
+    conn.execute('''
+        UPDATE employees 
+        SET name = ?, email = ?, department = ?, position = ?, role = ?
+        WHERE id = ?
+    ''', (data['name'], data['email'], data['department'], 
+          data['position'], data.get('role', 'employee'), employee_id))
+    
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Employee updated successfully'})
+
+@app.route('/api/employees/<employee_id>', methods=['DELETE'])
+def delete_employee(employee_id):
+    conn = get_db_connection()
+    
+    # Delete related records first
+    conn.execute('DELETE FROM leave_requests WHERE employee_id = ?', (employee_id,))
+    conn.execute('DELETE FROM leave_balances WHERE employee_id = ?', (employee_id,))
+    conn.execute('DELETE FROM employees WHERE id = ?', (employee_id,))
+    
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Employee deleted successfully'})
+
+# Leave Requests CRUD
+@app.route('/api/leave-requests', methods=['GET'])
+def get_leave_requests():
+    conn = get_db_connection()
+    requests = conn.execute('''
+        SELECT lr.*, e.name as employee_name 
+        FROM leave_requests lr 
+        JOIN employees e ON lr.employee_id = e.id 
+        ORDER BY lr.created_at DESC
+    ''').fetchall()
+    conn.close()
+    return jsonify([dict(req) for req in requests])
+
+@app.route('/api/leave-requests', methods=['POST'])
+def create_leave_request():
+    data = request.get_json()
+    
+    conn = get_db_connection()
+    
+    # Get employee name
+    employee = conn.execute('SELECT name FROM employees WHERE id = ?', 
+                          (data['employee_id'],)).fetchone()
+    if not employee:
+        conn.close()
+        return jsonify({'error': 'Employee not found'}), 404
+    
+    # Calculate days
+    days = calculate_days(data['start_date'], data['end_date'])
+    
+    # Check leave balance
+    balance = conn.execute('''
+        SELECT remaining_days FROM leave_balances 
+        WHERE employee_id = ? AND leave_type = ? AND year = 2024
+    ''', (data['employee_id'], data['leave_type'])).fetchone()
+    
+    if not balance or balance['remaining_days'] < days:
+        conn.close()
+        return jsonify({'error': 'Insufficient leave balance'}), 400
+    
+    request_id = str(uuid.uuid4())
+    
+    conn.execute('''
+        INSERT INTO leave_requests 
+        (id, employee_id, employee_name, leave_type, start_date, end_date, 
+         days_requested, reason, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    ''', (request_id, data['employee_id'], employee['name'], 
+          data['leave_type'], data['start_date'], data['end_date'], 
+          days, data.get('reason', '')))
+    
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Leave request submitted successfully', 'id': request_id}), 201
+
+@app.route('/api/leave-requests/<request_id>/approve', methods=['PUT'])
+def approve_leave_request(request_id):
+    data = request.get_json()
+    approved_by = data.get('approved_by', 'HR')
+    
+    conn = get_db_connection()
+    
+    # Get request details
+    request_details = conn.execute('''
+        SELECT employee_id, leave_type, days_requested 
+        FROM leave_requests WHERE id = ?
+    ''', (request_id,)).fetchone()
+    
+    if not request_details:
+        conn.close()
+        return jsonify({'error': 'Request not found'}), 404
+    
+    # Update request status
+    conn.execute('''
+        UPDATE leave_requests 
+        SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ''', (approved_by, request_id))
+    
+    # Update leave balance
+    conn.execute('''
+        UPDATE leave_balances 
+        SET used_days = used_days + ?, remaining_days = remaining_days - ?
+        WHERE employee_id = ? AND leave_type = ? AND year = 2024
+    ''', (request_details['days_requested'], request_details['days_requested'],
+          request_details['employee_id'], request_details['leave_type']))
+    
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Leave request approved successfully'})
+
+@app.route('/api/leave-requests/<request_id>/reject', methods=['PUT'])
+def reject_leave_request(request_id):
+    data = request.get_json()
+    approved_by = data.get('approved_by', 'HR')
+    
+    conn = get_db_connection()
+    conn.execute('''
+        UPDATE leave_requests 
+        SET status = 'rejected', approved_by = ?, approved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ''', (approved_by, request_id))
+    
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Leave request rejected'})
+
+@app.route('/api/leave-requests/<request_id>', methods=['DELETE'])
+def delete_leave_request(request_id):
+    conn = get_db_connection()
+    conn.execute('DELETE FROM leave_requests WHERE id = ?', (request_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Leave request deleted successfully'})
+
+# Leave Balances
+@app.route('/api/leave-balances/<employee_id>', methods=['GET'])
+def get_leave_balances(employee_id):
+    conn = get_db_connection()
+    balances = conn.execute('''
+        SELECT * FROM leave_balances 
+        WHERE employee_id = ? AND year = 2024
+        ORDER BY leave_type
+    ''', (employee_id,)).fetchall()
+    conn.close()
+    return jsonify([dict(balance) for balance in balances])
+
+@app.route('/api/dashboard/stats', methods=['GET'])
+def get_dashboard_stats():
+    conn = get_db_connection()
+    
+    stats = {
+        'total_employees': conn.execute('SELECT COUNT(*) FROM employees').fetchone()[0],
+        'pending_requests': conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'pending'").fetchone()[0],
+        'approved_requests': conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'approved'").fetchone()[0],
+        'total_requests': conn.execute('SELECT COUNT(*) FROM leave_requests').fetchone()[0]
+    }
+    
+    conn.close()
+    return jsonify(stats)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    init_db()
+    app.run(debug=True, port=5000)
